@@ -62,3 +62,6 @@ mnt_*/**
 
 # Access logs
 access_log.csv
+
+# Local sqlite database
+tiering_metadata.db
