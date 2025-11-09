@@ -36,7 +36,7 @@ PROMOTE_WARM_TO_HOT_COUNT = 10
 
 # Demotion Thresholds (Moving DOWN to a cheaper tier)
 # If not accessed for 14 days, move from Hot to Warm
-DEMOTE_HOT_TO_WARM_DAYS = DEMOTE_HOT_TO_WARM_DAYS = 0.0001 * DAYS  # Forces demotion almost immediately #14 * DAYS
+DEMOTE_HOT_TO_WARM_DAYS = 14 * DAYS
 
 # If not accessed for 60 days, move from Warm to Cold
 DEMOTE_WARM_TO_COLD_DAYS = 60 * DAYS
