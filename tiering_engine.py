@@ -1,4 +1,5 @@
 import argparse
+import json
 import time
 from metadata_store import MetadataStore
 import os
@@ -16,8 +17,10 @@ S3_BUCKET_NAME = "my-tiering-cold-storage-2025" # <<--- YOUR BUCKET NAME
 AWS_REGION = "us-east-1" 
 
 # Local cloud simulation (for testing without AWS)
+# Defaults will be overridden by config.json when provided
 USE_LOCAL_CLOUD = True
 LOCAL_CLOUD_PATH = "C:\\Users\\aacha\\OneDrive\\Desktop\\zoho\\mnt_cloud"
+CONFIG_PATH_DEFAULT = "config.json"
 
 # ... [The rest of the TIERING LOGIC CONFIGURATION remains the same]
 
@@ -28,18 +31,21 @@ SECONDS_IN_DAY = 24 * 60 * 60
 DAYS = SECONDS_IN_DAY 
 
 # Promotion Thresholds (Moving UP to a faster tier)
-# If accessed within 24 hours, move from Cold to Warm
+# If accessed within 24 hours, move from Cold to Warm (can be overridden)
 PROMOTE_COLD_TO_WARM_DAYS = 1 
 
-# If accessed more than 10 times in 7 days, move from Warm to Hot
+# If accessed more than X times in 7 days, move from Warm to Hot (can be overridden)
 PROMOTE_WARM_TO_HOT_COUNT = 10 
 
 # Demotion Thresholds (Moving DOWN to a cheaper tier)
-# If not accessed for 14 days, move from Hot to Warm
+# Defaults (in seconds) - will be overridden from config if present
 DEMOTE_HOT_TO_WARM_DAYS = 14 * DAYS
-
-# If not accessed for 60 days, move from Warm to Cold
 DEMOTE_WARM_TO_COLD_DAYS = 60 * DAYS
+
+# Pattern thresholds (defaults)
+PATTERN_PROTECT_THRESHOLD = 0.6
+WARM_TO_COLD_PATTERN_BLOCK = 0.5
+PROMOTE_PATTERN_THRESHOLD = 0.7
 
 # --- 2. Data Mover Functions ---
 
@@ -203,8 +209,42 @@ def generate_move_plan():
 
 def main(dry_run=False, show_scores=False, use_local_cloud=None):
     global USE_LOCAL_CLOUD
+    global DEMOTE_HOT_TO_WARM_DAYS, DEMOTE_WARM_TO_COLD_DAYS
+    global PROMOTE_WARM_TO_HOT_COUNT, PROMOTE_COLD_TO_WARM_DAYS
+    global PATTERN_PROTECT_THRESHOLD, WARM_TO_COLD_PATTERN_BLOCK, PROMOTE_PATTERN_THRESHOLD
     if use_local_cloud is not None:
         USE_LOCAL_CLOUD = use_local_cloud
+
+    # Load config file if present
+    config_path = CONFIG_PATH_DEFAULT
+    # If an env variable or different path is required, it can be passed via CLI in the future
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                cfg = json.load(f)
+
+            # Apply config overrides (days -> seconds conversion)
+            if 'demote_hot_to_warm_days' in cfg:
+                DEMOTE_HOT_TO_WARM_DAYS = float(cfg['demote_hot_to_warm_days']) * DAYS
+            if 'demote_warm_to_cold_days' in cfg:
+                DEMOTE_WARM_TO_COLD_DAYS = float(cfg['demote_warm_to_cold_days']) * DAYS
+            if 'promote_cold_to_warm_days' in cfg:
+                PROMOTE_COLD_TO_WARM_DAYS = float(cfg['promote_cold_to_warm_days'])
+            if 'promote_warm_to_hot_count' in cfg:
+                PROMOTE_WARM_TO_HOT_COUNT = int(cfg['promote_warm_to_hot_count'])
+            if 'pattern_protect_threshold' in cfg:
+                PATTERN_PROTECT_THRESHOLD = float(cfg['pattern_protect_threshold'])
+            if 'warm_to_cold_pattern_block' in cfg:
+                WARM_TO_COLD_PATTERN_BLOCK = float(cfg['warm_to_cold_pattern_block'])
+            if 'promote_pattern_threshold' in cfg:
+                PROMOTE_PATTERN_THRESHOLD = float(cfg['promote_pattern_threshold'])
+            if 'use_local_cloud' in cfg:
+                USE_LOCAL_CLOUD = bool(cfg['use_local_cloud'])
+            if 'local_cloud_path' in cfg:
+                LOCAL_CLOUD_PATH = cfg['local_cloud_path']
+
+        except Exception as e:
+            print(f"Warning: failed to read config.json: {e}. Using defaults.")
 
     store = MetadataStore()
     plan = generate_move_plan()
