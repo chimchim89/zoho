@@ -65,3 +65,6 @@ access_log.csv
 
 # Local sqlite database
 tiering_metadata.db
+
+# Local cloud simulation
+mnt_cloud/

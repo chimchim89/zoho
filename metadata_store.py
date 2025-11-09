@@ -70,12 +70,26 @@ class MetadataStore:
             current_tier TEXT NOT NULL,
             last_accessed_timestamp REAL,
             access_count_last_7_days INTEGER,
+            access_pattern_score REAL DEFAULT 0.0,
             created_timestamp REAL
         );
         """
         try:
+            # Create table if missing
             self.cursor.execute(sql_create_table)
             self.conn.commit()
+
+            # Migration: ensure access_pattern_score column exists in older DBs
+            self.cursor.execute("PRAGMA table_info(files);")
+            cols = [row[1] for row in self.cursor.fetchall()]
+            if 'access_pattern_score' not in cols:
+                try:
+                    self.cursor.execute("ALTER TABLE files ADD COLUMN access_pattern_score REAL DEFAULT 0.0;")
+                    self.conn.commit()
+                    print("Added missing column 'access_pattern_score' to files table.")
+                except sqlite3.Error as e:
+                    print(f"Warning: could not add access_pattern_score column: {e}")
+
             print("Metadata table checked/created successfully.")
         except sqlite3.Error as e:
             print(f"Error creating table: {e}")
@@ -84,12 +98,15 @@ class MetadataStore:
         """
         Retrieves all file records. Used by the Tiering Logic Engine.
         """
-        sql_select = "SELECT * FROM files;"
+        # Explicitly select columns in a stable order so callers can rely on indexes:
+        # file_id (0), current_path (1), current_tier (2), last_accessed_timestamp (3),
+        # access_count_last_7_days (4), access_pattern_score (5), created_timestamp (6)
+        sql_select = "SELECT file_id, current_path, current_tier, last_accessed_timestamp, access_count_last_7_days, access_pattern_score, created_timestamp FROM files;"
         self.cursor.execute(sql_select)
         # Returns a list of tuples (rows)
         return self.cursor.fetchall()
     
-    def update_file_stats(self, file_id, last_accessed_time, access_count):
+    def update_file_stats(self, file_id, last_accessed_time, access_count, access_pattern_score=0.0):
         """
         Updates the access statistics for a specific file.
         Used by the Pattern Analyzer.
@@ -97,11 +114,12 @@ class MetadataStore:
         sql_update = """
         UPDATE files 
         SET last_accessed_timestamp = ?, 
-            access_count_last_7_days = ?
+            access_count_last_7_days = ?,
+            access_pattern_score = ?
         WHERE file_id = ?;
         """
         try:
-            self.cursor.execute(sql_update, (last_accessed_time, access_count, file_id))
+            self.cursor.execute(sql_update, (last_accessed_time, access_count, access_pattern_score, file_id))
             self.conn.commit()
             return True
         except sqlite3.Error as e:

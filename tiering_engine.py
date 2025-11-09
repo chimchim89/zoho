@@ -1,3 +1,4 @@
+import argparse
 import time
 from metadata_store import MetadataStore
 import os
@@ -13,6 +14,10 @@ WARM_TIER_PATH = "C:\\Users\\aacha\\OneDrive\\Desktop\\zoho\\mnt_hdd"
 # AWS S3 Settings (Replace with your actual values)
 S3_BUCKET_NAME = "my-tiering-cold-storage-2025" # <<--- YOUR BUCKET NAME
 AWS_REGION = "us-east-1" 
+
+# Local cloud simulation (for testing without AWS)
+USE_LOCAL_CLOUD = True
+LOCAL_CLOUD_PATH = "C:\\Users\\aacha\\OneDrive\\Desktop\\zoho\\mnt_cloud"
 
 # ... [The rest of the TIERING LOGIC CONFIGURATION remains the same]
 
@@ -66,22 +71,31 @@ def execute_move(move_detail, store):
             new_path = dest_path
             
         elif to_tier == 'Cold':
-            # Local -> S3 (Archive)
-            s3 = boto3.client('s3', region_name=AWS_REGION)
-            s3.upload_file(source_path, S3_BUCKET_NAME, dest_key)
-            
-            # Delete the local source file after successful upload
-            os.remove(source_path) 
-            new_path = f"s3://{S3_BUCKET_NAME}/{dest_key}" # Update path to S3 URL
+            # Local -> Cold (S3 or Local Cloud)
+            if USE_LOCAL_CLOUD:
+                # Ensure local cloud dir exists
+                os.makedirs(LOCAL_CLOUD_PATH, exist_ok=True)
+                cloud_dest = os.path.join(LOCAL_CLOUD_PATH, file_name)
+                shutil.move(source_path, cloud_dest)
+                new_path = cloud_dest
+            else:
+                # Upload to S3
+                s3 = boto3.client('s3', region_name=AWS_REGION)
+                s3.upload_file(source_path, S3_BUCKET_NAME, dest_key)
+                os.remove(source_path)
+                new_path = f"s3://{S3_BUCKET_NAME}/{dest_key}" # Update path to S3 URL
             
         elif from_tier == 'Cold':
-            # S3 -> Local (Retrieval) - Simplified: always retrieves to Warm
-            s3 = boto3.client('s3', region_name=AWS_REGION)
-            dest_key = file_name
-            s3.download_file(S3_BUCKET_NAME, dest_key, dest_path)
-            
-            # In a real system, you would update the S3 object's tier or delete it.
-            new_path = dest_path 
+            # Cold -> Local (Retrieval)
+            if USE_LOCAL_CLOUD:
+                cloud_source = os.path.join(LOCAL_CLOUD_PATH, file_name)
+                shutil.move(cloud_source, dest_path)
+                new_path = dest_path
+            else:
+                s3 = boto3.client('s3', region_name=AWS_REGION)
+                dest_key = file_name
+                s3.download_file(S3_BUCKET_NAME, dest_key, dest_path)
+                new_path = dest_path 
 
         # --- UPDATE DATABASE (Critical Step) ---
         if store.update_file_location(file_id, new_path, to_tier):
@@ -105,7 +119,7 @@ def generate_move_plan():
     store.close()
     
     # Map column indices from your MetadataStore.get_all_files() query
-    # Columns: file_id (0), current_path (1), current_tier (2), last_accessed_timestamp (3), access_count_last_7_days (4), created_timestamp (5)
+    # Columns: file_id (0), current_path (1), current_tier (2), last_accessed_timestamp (3), access_count_last_7_days (4), access_pattern_score (5), created_timestamp (6)
     
     move_plan = []
     current_time = time.time()
@@ -113,33 +127,45 @@ def generate_move_plan():
     print(f"--- 1. Applying Tiering Logic to {len(all_files)} Files ---")
 
     for file_record in all_files:
-        file_id, current_path, current_tier, last_access, access_count, _ = file_record
+        # Support older schema without access_pattern_score (6 columns) and new schema (7 columns)
+        if len(file_record) == 7:
+            file_id, current_path, current_tier, last_access, access_count, pattern_score, _ = file_record
+        elif len(file_record) == 6:
+            file_id, current_path, current_tier, last_access, access_count, _ = file_record
+            pattern_score = 0.0
+        else:
+            # Unexpected row shape; skip
+            print(f"Warning: unexpected DB row shape for record: {file_record}")
+            continue
         
         # Calculate time difference in seconds
         time_since_last_access = current_time - last_access if last_access else float('inf')
         
-        # --- DEMOTION LOGIC (Moving Down) ---
+    # --- DEMOTION LOGIC (Moving Down) ---
         
         if current_tier == "Hot":
-            # Rule: Hot -> Warm (if not accessed for 14 days)
-            if time_since_last_access > DEMOTE_HOT_TO_WARM_DAYS:
+            # Rule: Hot -> Warm (if not accessed for threshold AND low pattern score)
+            # We protect high pattern_score files from demotion even if last access is old
+            PATTERN_PROTECT_THRESHOLD = 0.6
+            if time_since_last_access > DEMOTE_HOT_TO_WARM_DAYS and (pattern_score < PATTERN_PROTECT_THRESHOLD):
                 move_plan.append({
                     'id': file_id,
                     'from': 'Hot',
                     'to': 'Warm',
                     'path': current_path,
-                    'reason': f"Unused for > {DEMOTE_HOT_TO_WARM_DAYS / DAYS:.0f} days ({time_since_last_access / DAYS:.2f} days since last access)."
+                    'reason': f"Unused for > {DEMOTE_HOT_TO_WARM_DAYS / DAYS:.0f} days and low pattern score ({pattern_score:.2f})."
                 })
                 
         elif current_tier == "Warm":
-            # Rule: Warm -> Cold (if not accessed for 60 days)
-            if time_since_last_access > DEMOTE_WARM_TO_COLD_DAYS:
+            # Rule: Warm -> Cold (if not accessed for 60 days) but protect if pattern is high
+            WARM_TO_COLD_PATTERN_BLOCK = 0.5
+            if time_since_last_access > DEMOTE_WARM_TO_COLD_DAYS and (pattern_score < WARM_TO_COLD_PATTERN_BLOCK):
                 move_plan.append({
                     'id': file_id,
                     'from': 'Warm',
                     'to': 'Cold',
                     'path': current_path,
-                    'reason': f"Unused for > {DEMOTE_WARM_TO_COLD_DAYS / DAYS:.0f} days."
+                    'reason': f"Unused for > {DEMOTE_WARM_TO_COLD_DAYS / DAYS:.0f} days and low pattern score ({pattern_score:.2f})."
                 })
 
         # --- PROMOTION LOGIC (Moving Up) ---
@@ -147,14 +173,16 @@ def generate_move_plan():
         # Note: In our current simulation, files start at 'Hot'.
         # This logic is mainly for files that have already been moved down.
 
-        if current_tier == "Warm" and access_count > PROMOTE_WARM_TO_HOT_COUNT:
-            # Rule: Warm -> Hot (if suddenly accessed frequently)
+        # Use pattern_score to promote as well: high pattern_score in Warm should go Hot
+        PROMOTE_PATTERN_THRESHOLD = 0.7
+        if current_tier == "Warm" and (access_count > PROMOTE_WARM_TO_HOT_COUNT or pattern_score > PROMOTE_PATTERN_THRESHOLD):
+            # Rule: Warm -> Hot (if accessed frequently or pattern indicates hotness)
             move_plan.append({
                 'id': file_id,
                 'from': 'Warm',
                 'to': 'Hot',
                 'path': current_path,
-                'reason': f"Access count is {access_count}, exceeding threshold of {PROMOTE_WARM_TO_HOT_COUNT}."
+                'reason': f"Access count is {access_count} or pattern score {pattern_score:.2f} exceeds thresholds."
             })
             
         elif current_tier == "Cold" and time_since_last_access < PROMOTE_COLD_TO_WARM_DAYS:
@@ -173,21 +201,49 @@ def generate_move_plan():
 
 # Find the 'if __name__ == '__main__': ' block and modify it as follows:
 
-if __name__ == '__main__':
+def main(dry_run=False, show_scores=False, use_local_cloud=None):
+    global USE_LOCAL_CLOUD
+    if use_local_cloud is not None:
+        USE_LOCAL_CLOUD = use_local_cloud
+
     store = MetadataStore()
     plan = generate_move_plan()
-    
+
     print("\n--- 2. MOVE PLAN GENERATED ---")
-    
+
+    if show_scores:
+        print("Current file scores (file_id: pattern_score):")
+        for r in store.get_all_files():
+            print(f"  {r[0]}: {r[5]:.3f}")
+
     if plan:
         print(f"Total Moves Recommended: {len(plan)}\n")
-        
+
         for move in plan:
-            # Execute the move for each recommendation
-            execute_move(move, store)
-            
+            print(f"- Plan: {move['id']} {move['from']} -> {move['to']} because {move.get('reason')}")
+            if not dry_run:
+                execute_move(move, store)
+
     else:
         print("No moves are currently recommended based on the tiering rules.")
-        
+
     store.close()
     print("\nTiering Engine execution complete.")
+
+
+def cli():
+    parser = argparse.ArgumentParser(description='Tiering engine: generate and execute move plans')
+    parser.add_argument('--dry-run', action='store_true', help='Only generate and print move plan; do not execute moves')
+    parser.add_argument('--show-scores', action='store_true', help='Show access pattern scores for all files')
+    parser.add_argument('--use-local-cloud', type=str, choices=['true','false'], help='Override local cloud usage')
+    args = parser.parse_args()
+
+    use_local = None
+    if args.use_local_cloud is not None:
+        use_local = True if args.use_local_cloud.lower() == 'true' else False
+
+    main(dry_run=args.dry_run, show_scores=args.show_scores, use_local_cloud=use_local)
+
+
+if __name__ == '__main__':
+    cli()
