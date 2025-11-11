@@ -152,48 +152,49 @@ def generate_move_plan(store=None):
         # Calculate time difference in seconds
         time_since_last_access = current_time - last_access if last_access else float('inf')
         
-    # --- DEMOTION LOGIC (Moving Down) ---
+        # --- DEMOTION LOGIC (Moving Down) ---
+        # We use sequential `if` statements here instead of `if/elif` to allow for
+        # a direct Hot -> Cold demotion in a single logical step if a file is very old.
+        # The engine will first evaluate Hot->Warm, then check if the file (now considered Warm)
+        # also meets the criteria for Warm->Cold.
         
         if current_tier == "Hot":
-            # Rule: Hot -> Warm (if not accessed for threshold AND low pattern score)
-            # We protect high pattern_score files from demotion even if last access is old
-            PATTERN_PROTECT_THRESHOLD = 0.6
             if time_since_last_access > DEMOTE_HOT_TO_WARM_DAYS and (pattern_score < PATTERN_PROTECT_THRESHOLD):
                 move_plan.append({
                     'id': file_id,
                     'from': 'Hot',
                     'to': 'Warm',
                     'path': current_path,
-                    'reason': f"Unused for > {DEMOTE_HOT_TO_WARM_DAYS / DAYS:.0f} days and low pattern score ({pattern_score:.2f})."
+                    'reason': f"Unused for > {DEMOTE_HOT_TO_WARM_DAYS / DAYS:.0f} days (low pattern score: {pattern_score:.2f})."
                 })
-                
-        elif current_tier == "Warm":
-            # Rule: Warm -> Cold (if not accessed for 60 days) but protect if pattern is high
-            WARM_TO_COLD_PATTERN_BLOCK = 0.5
+                current_tier = "Warm" # Tentatively update tier for the next check
+
+        if current_tier == "Warm":
             if time_since_last_access > DEMOTE_WARM_TO_COLD_DAYS and (pattern_score < WARM_TO_COLD_PATTERN_BLOCK):
-                move_plan.append({
-                    'id': file_id,
-                    'from': 'Warm',
-                    'to': 'Cold',
-                    'path': current_path,
-                    'reason': f"Unused for > {DEMOTE_WARM_TO_COLD_DAYS / DAYS:.0f} days and low pattern score ({pattern_score:.2f})."
-                })
+                # If a Hot->Warm move was already planned, overwrite it with a direct Hot->Cold move.
+                existing_move = next((m for m in move_plan if m['id'] == file_id), None)
+                if existing_move:
+                    existing_move['to'] = 'Cold'
+                    existing_move['reason'] = f"Unused for > {DEMOTE_WARM_TO_COLD_DAYS / DAYS:.0f} days (low pattern score: {pattern_score:.2f})."
+                else:
+                    move_plan.append({
+                        'id': file_id,
+                        'from': 'Warm',
+                        'to': 'Cold',
+                        'path': current_path,
+                        'reason': f"Unused for > {DEMOTE_WARM_TO_COLD_DAYS / DAYS:.0f} days (low pattern score: {pattern_score:.2f})."
+                    })
 
         # --- PROMOTION LOGIC (Moving Up) ---
-        
-        # Note: In our current simulation, files start at 'Hot'.
-        # This logic is mainly for files that have already been moved down.
-
-        # Use pattern_score to promote as well: high pattern_score in Warm should go Hot
-        PROMOTE_PATTERN_THRESHOLD = 0.7
-        if current_tier == "Warm" and (access_count > PROMOTE_WARM_TO_HOT_COUNT or pattern_score > PROMOTE_PATTERN_THRESHOLD):
+        # This part remains separate as a file can't be demoted and promoted in the same run.
+        elif current_tier == "Warm" and (access_count > PROMOTE_WARM_TO_HOT_COUNT or pattern_score > PROMOTE_PATTERN_THRESHOLD):
             # Rule: Warm -> Hot (if accessed frequently or pattern indicates hotness)
             move_plan.append({
                 'id': file_id,
                 'from': 'Warm',
                 'to': 'Hot',
                 'path': current_path,
-                'reason': f"Access count is {access_count} or pattern score {pattern_score:.2f} exceeds thresholds."
+                'reason': f"Access count is {access_count} or pattern score {pattern_score:.2f} exceeds promotion thresholds."
             })
             
         elif current_tier == "Cold" and time_since_last_access < PROMOTE_COLD_TO_WARM_DAYS:

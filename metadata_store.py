@@ -2,17 +2,18 @@ import sqlite3
 import time
 
 class MetadataStore:
-    def insert_new_file(self, file_id, current_path, current_tier="Hot"):
+    def insert_new_file(self, file_id, current_path, current_tier="Hot", backdate_seconds=0):
         """
         Adds a new file record when a file is initially created.
         
         :param file_id: Unique identifier for the file.
         :param current_path: The file's physical location (e.g., in mnt_ssd).
         :param current_tier: The starting tier (default is "Hot").
+        :param backdate_seconds: If > 0, backdate creation/access time by this many seconds.
         :return: True on success, False on duplicate or error.
         """
         # time.time() returns the number of seconds since the epoch (a standard timestamp)
-        current_time = time.time()
+        current_time = time.time() - backdate_seconds
         
         sql_insert = """
         INSERT INTO files (file_id, current_path, current_tier, last_accessed_timestamp, access_count_last_7_days, created_timestamp)

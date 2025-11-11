@@ -17,18 +17,32 @@ ACCESS_EVENTS = 50 # Total number of access events to log
 
 def create_dummy_file(index, store):
     """Creates a small file and registers it as 'Hot' in the database."""
-    file_id = f"doc_{index}_{uuid.uuid4().hex[:6]}"
+    # Let's create three age groups for a full demo
+    # Group 1: New (indices 1-3)
+    # Group 2: Old (indices 4-6) -> Should go to Warm
+    # Group 3: Very Old (indices 7-8) -> Should go to Cold
+    if index <= 3:
+        file_id_prefix, backdate_days = "new_doc", 0
+    elif index <= 6:
+        file_id_prefix, backdate_days = "old_doc", 30 # Inactive for 30 days
+    else:
+        file_id_prefix, backdate_days = "ancient_doc", 70 # Inactive for 70 days
+
+    file_id = f"{file_id_prefix}_{index}_{uuid.uuid4().hex[:6]}"
     file_name = f"{file_id}.txt"
     file_path = os.path.join(TIER_PATH, file_name)
     
     # Create simple content
     file_content = f"Data for {file_id}. Size: {random.randint(100, 500)} bytes." * 5 
 
+    # Backdate its creation/access time in the DB to make it a candidate for demotion.
+    backdate_seconds = backdate_days * 24 * 60 * 60
+
     try:
         with open(file_path, 'w') as f:
             f.write(file_content)
         
-        if store.insert_new_file(file_id, file_path, "Hot"):
+        if store.insert_new_file(file_id, file_path, "Hot", backdate_seconds):
             return file_id # Return the ID for use in the log
         
     except Exception as e:
@@ -52,11 +66,11 @@ def simulate_access(file_ids):
     for i in range(ACCESS_EVENTS):
         # Simulate time passing (e.g., small sleep)
         time.sleep(SIMULATION_DURATION_SECONDS / ACCESS_EVENTS) 
-
-        # Pick a file: skew towards the first few files to simulate 'Hot' data
-        # Files 0 and 1 are 60% likely to be chosen (Hot)
-        # Files 2 through 7 are 40% likely to be chosen (Warm/Cold)
-        weights = [0.30, 0.30, 0.05, 0.05, 0.05, 0.05, 0.10, 0.10]
+        
+        # Pick a file: skew access heavily towards the "new" files to keep them hot.
+        # The "old" and "ancient" files will receive almost no accesses.
+        # This ensures their `last_accessed_timestamp` remains old.
+        weights = [0.33, 0.33, 0.33] + [0.001] * (len(file_ids) - 3)
         
         chosen_id = random.choices(file_ids, weights=weights, k=1)[0]
         
