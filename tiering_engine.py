@@ -49,8 +49,9 @@ PROMOTE_PATTERN_THRESHOLD = 0.7
 
 # Capacity Management (New)
 HOT_TIER_CAPACITY_THRESHOLD_PERCENT = 90.0 # At what % full to become aggressive
-HOT_TIER_AGGRESSIVE_DEMOTION_DAYS = 7 * DAYS # New demotion time when full
+HOT_TIER_AGGRESSIVE_DEMOTION_COUNT = 5 # How many "coldest" files to move when full
 
+HOT_TIER_IS_FULL = False # Global flag set by capacity check
 
 # --- 2. Data Mover Functions ---
 
@@ -164,6 +165,11 @@ def generate_move_plan(store=None):
         # also meets the criteria for Warm->Cold.
         
         if current_tier == "Hot":
+            # --- NEW: Capacity Pressure Demotion ---
+            # This is a placeholder for our new logic. We will populate it later.
+            # We will handle this after checking all other rules.
+
+            # --- Standard Demotion Logic ---
             if time_since_last_access > DEMOTE_HOT_TO_WARM_DAYS and (pattern_score < PATTERN_PROTECT_THRESHOLD):
                 move_plan.append({
                     'id': file_id,
@@ -211,34 +217,60 @@ def generate_move_plan(store=None):
                 'path': current_path,
                 'reason': f"Accessed within the last {PROMOTE_COLD_TO_WARM_DAYS} day."
             })
-            
+    
+    # --- NEW: Capacity Pressure Demotion Logic ---
+    # If the hot tier is full, find the coldest files on that tier and demote them.
+    if HOT_TIER_IS_FULL:
+        # Get all files currently on the Hot tier that are NOT already planned for a move
+        planned_ids = {m['id'] for m in move_plan}
+        hot_candidates = [
+            f for f in all_files 
+            if f[2] == 'Hot' and f[0] not in planned_ids
+        ]
+
+        # Sort candidates by "coldness": lowest pattern score first, then oldest access time
+        # f[5] is access_pattern_score, f[3] is last_accessed_timestamp
+        hot_candidates.sort(key=lambda f: (f[5], f[3]))
+
+        # Select the top N coldest files to demote
+        files_to_demote = hot_candidates[:HOT_TIER_AGGRESSIVE_DEMOTION_COUNT]
+
+        if files_to_demote:
+            print(f"INFO: Capacity pressure is high. Targeting {len(files_to_demote)} coldest files for demotion.")
+            for file_record in files_to_demote:
+                file_id, current_path, _, _, _, pattern_score, _ = file_record
+                move_plan.append({
+                    'id': file_id,
+                    'from': 'Hot',
+                    'to': 'Warm',
+                    'path': current_path,
+                    'reason': f"Forced demotion due to Hot tier capacity pressure (score: {pattern_score:.2f})."
+                })
+
     return move_plan
 
 def check_and_adjust_for_capacity():
     """
-    Checks Hot tier capacity and adjusts demotion rules if it's nearly full.
+    Checks Hot tier capacity and sets a global flag if it's nearly full.
     This implements the 'Tier Capacity' item from TODO.md.
     """
-    global DEMOTE_HOT_TO_WARM_DAYS
+    global HOT_TIER_IS_FULL
 
     try:
         usage = shutil.disk_usage(HOT_TIER_PATH)
         used_percent = (usage.used / usage.total) * 100
 
         if used_percent > HOT_TIER_CAPACITY_THRESHOLD_PERCENT:
-            print(f"WARNING: Hot tier at {used_percent:.1f}% capacity (threshold: {HOT_TIER_CAPACITY_THRESHOLD_PERCENT:.1f}%).")
-            print(f"         -> Activating aggressive demotion from {DEMOTE_HOT_TO_WARM_DAYS / DAYS:.0f} days to {HOT_TIER_AGGRESSIVE_DEMOTION_DAYS / DAYS:.0f} days.")
-            DEMOTE_HOT_TO_WARM_DAYS = HOT_TIER_AGGRESSIVE_DEMOTION_DAYS
+            print(f"WARNING: Hot tier at {used_percent:.1f}% capacity. Activating capacity pressure demotion.")
+            HOT_TIER_IS_FULL = True
         else:
             print(f"INFO: Hot tier capacity check OK ({used_percent:.1f}% used).")
+            HOT_TIER_IS_FULL = False
 
     except FileNotFoundError:
         print(f"WARNING: Could not check capacity. Path not found: {HOT_TIER_PATH}")
     except Exception as e:
         print(f"WARNING: An error occurred during capacity check: {e}")
-# --- 3. Modify Main Execution Block ---
-
-# Find the 'if __name__ == '__main__': ' block and modify it as follows:
 
 def main(dry_run=False, show_scores=False, use_local_cloud=None, config_path=None):
     global USE_LOCAL_CLOUD
