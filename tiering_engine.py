@@ -47,6 +47,11 @@ PATTERN_PROTECT_THRESHOLD = 0.6
 WARM_TO_COLD_PATTERN_BLOCK = 0.5
 PROMOTE_PATTERN_THRESHOLD = 0.7
 
+# Capacity Management (New)
+HOT_TIER_CAPACITY_THRESHOLD_PERCENT = 90.0 # At what % full to become aggressive
+HOT_TIER_AGGRESSIVE_DEMOTION_DAYS = 7 * DAYS # New demotion time when full
+
+
 # --- 2. Data Mover Functions ---
 
 def execute_move(move_detail, store):
@@ -209,6 +214,28 @@ def generate_move_plan(store=None):
             
     return move_plan
 
+def check_and_adjust_for_capacity():
+    """
+    Checks Hot tier capacity and adjusts demotion rules if it's nearly full.
+    This implements the 'Tier Capacity' item from TODO.md.
+    """
+    global DEMOTE_HOT_TO_WARM_DAYS
+
+    try:
+        usage = shutil.disk_usage(HOT_TIER_PATH)
+        used_percent = (usage.used / usage.total) * 100
+
+        if used_percent > HOT_TIER_CAPACITY_THRESHOLD_PERCENT:
+            print(f"WARNING: Hot tier at {used_percent:.1f}% capacity (threshold: {HOT_TIER_CAPACITY_THRESHOLD_PERCENT:.1f}%).")
+            print(f"         -> Activating aggressive demotion from {DEMOTE_HOT_TO_WARM_DAYS / DAYS:.0f} days to {HOT_TIER_AGGRESSIVE_DEMOTION_DAYS / DAYS:.0f} days.")
+            DEMOTE_HOT_TO_WARM_DAYS = HOT_TIER_AGGRESSIVE_DEMOTION_DAYS
+        else:
+            print(f"INFO: Hot tier capacity check OK ({used_percent:.1f}% used).")
+
+    except FileNotFoundError:
+        print(f"WARNING: Could not check capacity. Path not found: {HOT_TIER_PATH}")
+    except Exception as e:
+        print(f"WARNING: An error occurred during capacity check: {e}")
 # --- 3. Modify Main Execution Block ---
 
 # Find the 'if __name__ == '__main__': ' block and modify it as follows:
@@ -250,6 +277,9 @@ def main(dry_run=False, show_scores=False, use_local_cloud=None, config_path=Non
 
         except Exception as e:
             print(f"Warning: failed to read config.json: {e}. Using defaults.")
+
+    # Check tier capacity and adjust rules before generating the plan
+    check_and_adjust_for_capacity()
 
     store = MetadataStore()
     plan = generate_move_plan()
