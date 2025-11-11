@@ -25,11 +25,9 @@ def create_dummy_file(index, store):
     file_content = f"Data for {file_id}. Size: {random.randint(100, 500)} bytes." * 5 
 
     try:
-        # Create the physical file on disk
         with open(file_path, 'w') as f:
             f.write(file_content)
         
-        # Register the file in the metadata database
         if store.insert_new_file(file_id, file_path, "Hot"):
             return file_id # Return the ID for use in the log
         
@@ -50,7 +48,6 @@ def simulate_access(file_ids):
     print(f"\nStarting simulation for {len(file_ids)} files over {SIMULATION_DURATION_SECONDS}s...")
     
     log_data = []
-    start_time = time.time()
     
     for i in range(ACCESS_EVENTS):
         # Simulate time passing (e.g., small sleep)
@@ -78,6 +75,7 @@ def simulate_access(file_ids):
 
 
 if __name__ == '__main__':
+    """Main execution block."""
     if not os.path.exists(TIER_PATH):
         print(f"FATAL ERROR: Hot Tier path {TIER_PATH} does not exist. Please check your configuration.")
     else:

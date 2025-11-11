@@ -116,13 +116,18 @@ def execute_move(move_detail, store):
         return False
 
 
-def generate_move_plan():
+def generate_move_plan(store=None):
     """
     Applies tiering rules to all files in the database and generates a move plan.
+    If `store` is provided, it will be used (useful for tests); otherwise a new MetadataStore is created.
     """
-    store = MetadataStore()
+    created_store = False
+    if store is None:
+        store = MetadataStore()
+        created_store = True
     all_files = store.get_all_files()
-    store.close()
+    if created_store:
+        store.close()
     
     # Map column indices from your MetadataStore.get_all_files() query
     # Columns: file_id (0), current_path (1), current_tier (2), last_accessed_timestamp (3), access_count_last_7_days (4), access_pattern_score (5), created_timestamp (6)
@@ -207,7 +212,7 @@ def generate_move_plan():
 
 # Find the 'if __name__ == '__main__': ' block and modify it as follows:
 
-def main(dry_run=False, show_scores=False, use_local_cloud=None):
+def main(dry_run=False, show_scores=False, use_local_cloud=None, config_path=None):
     global USE_LOCAL_CLOUD
     global DEMOTE_HOT_TO_WARM_DAYS, DEMOTE_WARM_TO_COLD_DAYS
     global PROMOTE_WARM_TO_HOT_COUNT, PROMOTE_COLD_TO_WARM_DAYS
@@ -215,12 +220,11 @@ def main(dry_run=False, show_scores=False, use_local_cloud=None):
     if use_local_cloud is not None:
         USE_LOCAL_CLOUD = use_local_cloud
 
-    # Load config file if present
-    config_path = CONFIG_PATH_DEFAULT
-    # If an env variable or different path is required, it can be passed via CLI in the future
-    if os.path.exists(config_path):
+    # Load config file if present; config_path param overrides default
+    cfg_path = config_path if config_path else CONFIG_PATH_DEFAULT
+    if os.path.exists(cfg_path):
         try:
-            with open(config_path, 'r') as f:
+            with open(cfg_path, 'r') as f:
                 cfg = json.load(f)
 
             # Apply config overrides (days -> seconds conversion)
@@ -276,13 +280,16 @@ def cli():
     parser.add_argument('--dry-run', action='store_true', help='Only generate and print move plan; do not execute moves')
     parser.add_argument('--show-scores', action='store_true', help='Show access pattern scores for all files')
     parser.add_argument('--use-local-cloud', type=str, choices=['true','false'], help='Override local cloud usage')
+    parser.add_argument('--config', type=str, help='Path to config.json to override defaults')
     args = parser.parse_args()
 
     use_local = None
     if args.use_local_cloud is not None:
         use_local = True if args.use_local_cloud.lower() == 'true' else False
 
-    main(dry_run=args.dry_run, show_scores=args.show_scores, use_local_cloud=use_local)
+    cfg_path = args.config if args.config else None
+
+    main(dry_run=args.dry_run, show_scores=args.show_scores, use_local_cloud=use_local, config_path=cfg_path)
 
 
 if __name__ == '__main__':

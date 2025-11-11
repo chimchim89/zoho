@@ -1,0 +1,8 @@
+{
+  "demote_hot_to_warm_days": 0,
+  "demote_warm_to_cold_days": 0,
+  "pattern_protect_threshold": 0.25,
+  "warm_to_cold_pattern_block": 0.2,
+  "use_local_cloud": true,
+  "local_cloud_path": "C:\\Users\\aacha\\OneDrive\\Desktop\\zoho\\mnt_cloud"
+}
